@@ -211,6 +211,39 @@ def status_of(r) -> tuple[str, str]:
 
 
 # ----------------------------------------------------------------------------
+# Admin gate — costing (₹ gift value) is hidden until an admin unlocks it.
+# ----------------------------------------------------------------------------
+def _admin_password() -> str:
+    """Admin password from Streamlit secrets, with a fallback default."""
+    try:
+        return str(st.secrets["admin_password"])
+    except Exception:
+        return "east-admin-2026"
+
+
+def admin_gate() -> bool:
+    """Sidebar login. Returns True when admin mode is active."""
+    st.session_state.setdefault("admin", False)
+    with st.sidebar:
+        st.markdown("### 🔒 Admin")
+        if st.session_state.admin:
+            st.success("Admin mode — costing visible")
+            if st.button("Log out"):
+                st.session_state.admin = False
+                st.rerun()
+        else:
+            st.caption("Sales team: leave this closed. Admins unlock gift-value / costing.")
+            pw = st.text_input("Admin password", type="password", key="pw")
+            if st.button("Unlock"):
+                if pw and pw == _admin_password():
+                    st.session_state.admin = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password")
+    return st.session_state.admin
+
+
+# ----------------------------------------------------------------------------
 # Header
 # ----------------------------------------------------------------------------
 if not DATA_PATH.exists():
@@ -220,12 +253,14 @@ if not DATA_PATH.exists():
 mtime = DATA_PATH.stat().st_mtime
 dealers = aggregate_dealers(mtime)
 last_updated = datetime.fromtimestamp(mtime).strftime("%d %b %Y")
+admin = admin_gate()
 
+rate = f"₹{GIFT_PER_POINT}/pt · " if admin else ""
 st.markdown(
     f"""
     <div class="hero">
       <h1>⚡ Q1 Scheme · East</h1>
-      <div class="sub">{POINTS_PER_MT} pts/MT · ₹{GIFT_PER_POINT}/pt · +25% early-bird on volume
+      <div class="sub">{POINTS_PER_MT} pts/MT · {rate}+25% early-bird on volume
       by {EB_DATE.strftime('%d %b %Y')} (min {MIN_MT} MT) · qualify at {MIN_MT} MT</div>
       <span class="pill">Dealer qualifying status · updated {last_updated}</span>
     </div>
@@ -259,7 +294,7 @@ with st.container():
 # ----------------------------------------------------------------------------
 # Rendering helpers
 # ----------------------------------------------------------------------------
-def kpi_band(df: pd.DataFrame):
+def kpi_band(df: pd.DataFrame, admin: bool):
     n = len(df)
     qual = int(df["Qualified"].sum())
     eb = int(df["Early Bird"].sum())
@@ -272,8 +307,9 @@ def kpi_band(df: pd.DataFrame):
         ("green", "Early bird", str(eb)),
         ("accent", "Push list (8–12)", str(push)),
         ("", "Total points", inr(df["Points"].sum())),
-        ("accent", "Gift value", "₹" + inr(df["Gift Value"].sum())),
     ]
+    if admin:
+        cells.append(("accent", "Gift value", "₹" + inr(df["Gift Value"].sum())))
     html_cells = "".join(
         f'<div class="kpi {cls}"><div class="v">{v}</div><div class="l">{l}</div></div>'
         for cls, l, v in cells
@@ -281,7 +317,7 @@ def kpi_band(df: pd.DataFrame):
     st.markdown(f'<div class="kpi-grid">{html_cells}</div>', unsafe_allow_html=True)
 
 
-def dealer_rows(df: pd.DataFrame, ranked=True, note_mode=None) -> str:
+def dealer_rows(df: pd.DataFrame, admin: bool, ranked=True, note_mode=None) -> str:
     out = []
     for i, (_, r) in enumerate(df.iterrows(), 1):
         color, _ = status_of(r)
@@ -290,8 +326,9 @@ def dealer_rows(df: pd.DataFrame, ranked=True, note_mode=None) -> str:
             need = MIN_MT - r["Total MT"]
             right = (f'{mt_fmt(r["Total MT"])} MT<span>needs {mt_fmt(need)} MT</span>')
         else:
+            gift = f' · ₹{inr(r["Gift Value"])}' if admin else ""
             right = (f'{mt_fmt(r["Total MT"])} MT'
-                     f'<span>{inr(r["Points"])} pts · ₹{inr(r["Gift Value"])}</span>')
+                     f'<span>{inr(r["Points"])} pts{gift}</span>')
         out.append(
             f'<div class="row">{rank}'
             f'<div class="info"><div class="name">{html.escape(r["Dealer"])}</div>'
@@ -302,7 +339,7 @@ def dealer_rows(df: pd.DataFrame, ranked=True, note_mode=None) -> str:
     return "".join(out)
 
 
-def dealer_detail(r):
+def dealer_detail(r, admin: bool):
     color, label = status_of(r)
     bcls = {GREEN: "b-green", AMBER: "b-amber", RED: "b-red", NAVY: "b-amber"}[color]
     st.markdown(
@@ -311,10 +348,11 @@ def dealer_detail(r):
         f'<span class="badge {bcls}">{label}</span></div>',
         unsafe_allow_html=True,
     )
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total MT", mt_fmt(r["Total MT"]))
-    m2.metric("Points", inr(r["Points"]))
-    m3.metric("Gift Value", "₹" + inr(r["Gift Value"]))
+    cols = st.columns(3 if admin else 2)
+    cols[0].metric("Total MT", mt_fmt(r["Total MT"]))
+    cols[1].metric("Points", inr(r["Points"]))
+    if admin:
+        cols[2].metric("Gift Value", "₹" + inr(r["Gift Value"]))
 
     if not r["Qualified"]:
         need = MIN_MT - r["Total MT"]
@@ -325,11 +363,11 @@ def dealer_detail(r):
             pct = min(r["Total MT"] / tier, 1.0) * 100
             mult = EB_MULT if r["Early Bird"] else 1.0
             tier_pts = tier * POINTS_PER_MT * mult
+            gift_note = f' (₹{inr(tier_pts * GIFT_PER_POINT)})' if admin else ""
             st.markdown(
                 f'<div class="pbar"><div style="width:{pct:.0f}%"></div></div>'
                 f'<div class="ptext"><b>{mt_fmt(remaining)} MT</b> more to the '
-                f'<b>{tier} MT</b> milestone → ~{inr(tier_pts)} pts '
-                f'(₹{inr(tier_pts * GIFT_PER_POINT)})</div>',
+                f'<b>{tier} MT</b> milestone → ~{inr(tier_pts)} pts{gift_note}</div>',
                 unsafe_allow_html=True,
             )
         else:
@@ -358,14 +396,14 @@ def dealer_detail(r):
 # Body: dealer detail OR overview
 # ----------------------------------------------------------------------------
 if len(scope) == 1:
-    dealer_detail(scope.iloc[0])
+    dealer_detail(scope.iloc[0], admin)
 else:
-    kpi_band(scope)
+    kpi_band(scope, admin)
     tab_lead, tab_push, tab_all = st.tabs(["🏆 Leaderboard", "🎯 Push list", "📋 All dealers"])
 
     with tab_lead:
         top = scope.sort_values(["Points", "Total MT"], ascending=False).head(15)
-        st.markdown(dealer_rows(top, ranked=True), unsafe_allow_html=True)
+        st.markdown(dealer_rows(top, admin, ranked=True), unsafe_allow_html=True)
         st.caption("Top 15 by points. 🟢 early bird · 🔵 qualified · 🟠 almost (8–12 MT) · 🔴 not qualified")
 
     with tab_push:
@@ -375,15 +413,16 @@ else:
             st.info("No dealers in the 8–12 MT push range for this scope. 🎉")
         else:
             st.markdown(f"**{len(push)} dealers** are 8–12 MT — one push gets them qualified:")
-            st.markdown(dealer_rows(push, ranked=False, note_mode="push"), unsafe_allow_html=True)
+            st.markdown(dealer_rows(push, admin, ranked=False, note_mode="push"), unsafe_allow_html=True)
 
     with tab_all:
         show = scope.copy()
         show["Status"] = show.apply(lambda r: status_of(r)[1], axis=1)
-        show["Gift Value"] = show["Gift Value"].apply(lambda x: "₹" + inr(x))
         show["Points"] = show["Points"].apply(inr)
-        st.dataframe(
-            show[["Dealer", "Distributor", "State", "Total MT", "Points", "Gift Value", "Status"]],
-            hide_index=True, width="stretch",
-        )
+        cols = ["Dealer", "Distributor", "State", "Total MT", "Points"]
+        if admin:
+            show["Gift Value"] = show["Gift Value"].apply(lambda x: "₹" + inr(x))
+            cols.append("Gift Value")
+        cols.append("Status")
+        st.dataframe(show[cols], hide_index=True, width="stretch")
         st.caption("Tip: pick a Dealer in the filter above for full details and billing history.")

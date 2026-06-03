@@ -44,6 +44,22 @@ URL within a minute — the team always sees the latest on the existing link.
 4. Copy the resulting URL (e.g. `https://q1-scheme-east.streamlit.app`) and share it with
    the sales team. They open it in any mobile browser — no login, no install.
 
+## Admin / costing access
+
+The sales team sees only **volume (MT)** and **points** — all **gift value (₹) / costing**
+is hidden. To reveal it, open the sidebar (☰ on mobile) → **Admin** → enter the password
+→ **Unlock**.
+
+Set the password via Streamlit secrets (do **not** commit it). On Streamlit Community
+Cloud: app → **Settings → Secrets**, add:
+
+```toml
+admin_password = "your-secret-here"
+```
+
+Locally, create `.streamlit/secrets.toml` (already git-ignored) with the same line.
+If no secret is set, the fallback password is `east-admin-2026` — change it before sharing.
+
 ## Run locally
 
 ```bash
