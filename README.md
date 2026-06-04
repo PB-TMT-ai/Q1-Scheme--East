@@ -1,83 +1,92 @@
-# Q1 Scheme – East · Dealer Status Dashboard
+# Q1 Scheme · Dealer Status Dashboards (East / North & Central)
 
-A mobile-friendly dashboard so the East sales team can check, on their phones, where
-each dealer stands on the Q1 FY26 volume scheme — points earned, gift value, and
-what's left to qualify.
+Mobile-friendly dashboards so each zone's sales team can check, on their phones, where
+every dealer stands on the Q1 FY27 volume scheme — MT done, points earned, and what's
+left to qualify. One codebase, **scheme-driven**: each zone is pure config.
 
-## How the scheme is calculated
+## Schemes
 
-- **Region:** East · **50 points per MT** · **₹12 gift value per point**
-- **Qualifying minimum:** a dealer must do **≥ 12 MT total** to earn any points.
-- **Points:** linear — `MT × 50`.
-- **Early-bird bonus (+25%):** the volume billed **on or before 20 May 2026** earns
-  **×1.25** — *but only if that on-or-before-20-May volume is itself ≥ 12 MT*.
-  Volume billed after 20 May always earns ×1.0.
-- **Gift value (₹):** `points × 12`.
+| | **East** | **North & Central** |
+|---|---|---|
+| Points / MT | 50 | 35 |
+| Gift value / point | ₹12 | ₹10 |
+| Early bird | +25% on volume by 20 May 2026 (if that slice ≥ 12 MT) | none |
+| Qualify min | 12 MT | 12 MT |
+| Gift tiers (MT) | 12/24/36/48/60/80/100 | 12/30/60/90/120/150/200 |
+| Zones | East | North + Central (combined, with a Zone filter) |
 
-> Example: 30 MT on 10 May + 20 MT on 1 June → `30×62.5 + 20×50 = 2,875 pts` → **₹34,500**.
+Full scheme definitions live in [`docs/SCHEME.md`](docs/SCHEME.md); original workbooks in
+[`docs/`](docs/). Points are **linear**; **gifts are tier-based** (a dealer earns the gift
+of the highest MT tier reached).
 
-## The data
+## Code layout
 
-Volume lives in **two separate files** under `data/`, combined by the app per dealer:
+- `dashboard.py` — the shared, scheme-aware UI + calculation engine (`render(scheme)`).
+- `schemes.py` — the `Scheme` config objects (`EAST`, `NORTH_CENTRAL`).
+- `app.py` — **East** entry (`render(EAST)`).
+- `app_north_central.py` — **North & Central** entry (`render(NORTH_CENTRAL)`).
 
-- [`may_transactions.csv`](data/may_transactions.csv) — **May, date-wise (frozen).**
-  `Zone,State,Distributor,Dealer,Date,MT`, one row per billing. The real dates keep the
-  20-May early-bird split exact. Not touched again.
-- [`june_secondary.csv`](data/june_secondary.csv) — **June month-to-date aggregate.**
-  `Zone,State,Distributor,Dealer,MT`, one row per dealer (June is entirely after the
-  20-May cutoff, so no dates needed).
+Adding another zone = one `Scheme` entry + a data folder + a 3-line entry file. No engine
+changes.
 
-The scheme gift catalog is in [`data/gifts.csv`](data/gifts.csv) (per MT tier); the full
-scheme is preserved in [`docs/SCHEME.md`](docs/SCHEME.md) and
-[`docs/Q1_scheme_East.xlsx`](docs/Q1_scheme_East.xlsx).
+## Data
+
+Per scheme, under `data/<scheme>/`:
+
+- **East** (`data/east/`):
+  - `may_transactions.csv` — May, date-wise (frozen): `Zone,State,Distributor,Dealer,Date,MT`.
+  - `june_secondary.csv` — June month-to-date aggregate: `Zone,State,Distributor,Dealer,MT`.
+  - `gifts.csv` — gift catalog per MT tier.
+- **North & Central** (`data/north_central/`):
+  - `secondary.csv` — month-to-date aggregate (no dates, no early bird): `Zone,State,Distributor,Dealer,MT`.
+  - `gifts.csv` — gift catalog per MT tier.
 
 ### Updating the data
-- **June (daily):** send Claude the latest secondary-sales export (columns `Zone, SF Id,
-  Company Name, Secondary Sales in <Month>'26, State Name, Corrected Distributor Name`).
-  Claude filters `Zone = East`, normalizes the distributor names, and **replaces**
-  `june_secondary.csv` wholesale — so re-feeding daily never double-counts.
-- **May:** frozen; only revisit if a correction is needed.
+Send Claude the latest secondary-sales export (columns `Zone, SF Id, Company Name,
+Secondary Sales in <Month>'26, State Name, Corrected Distributor Name`). Claude scopes by
+**Zone** (East, or North + Central), normalizes names, and **replaces** the relevant
+aggregate file wholesale — so re-feeding (e.g. daily) never double-counts. East's May file
+is frozen; revisit only for corrections.
 
-Streamlit Cloud redeploys the same URL within a minute of each push.
+Streamlit Cloud redeploys each app within a minute of a push.
 
-> Note: the original May export ran through 2 June, so that early-June volume now lives in
-> `june_secondary.csv`, not the May file.
+## Deploy (one app per zone → one link each)
 
-## Deploy once (so the team gets a shareable link)
+On **https://share.streamlit.io** (sign in with GitHub), create **two** apps from this
+same repo:
 
-1. Push this repo to GitHub (already at `pb-tmt-ai/q1-scheme--east`).
-2. Go to **https://share.streamlit.io** and sign in with GitHub.
-3. **New app** → pick repo `pb-tmt-ai/q1-scheme--east`, the working branch, main file
-   `app.py` → **Deploy**.
-4. Copy the resulting URL (e.g. `https://q1-scheme-east.streamlit.app`) and share it with
-   the sales team. They open it in any mobile browser — no login, no install.
+1. East → main file `app.py` → e.g. `https://q1-scheme-east.streamlit.app`
+2. North & Central → main file `app_north_central.py` → e.g. `https://q1-scheme-north-central.streamlit.app`
+
+Share each link with the matching team. They open it in any mobile browser — no login.
 
 ## Admin / costing access
 
-The sales team sees only **volume (MT)** and **points** — all **gift names, gift value (₹)
-and costing** are hidden. To reveal them (qualified gift per dealer, gift cost, next-gift
-target), open the sidebar (☰ on mobile) → **Admin** → enter the password → **Unlock**.
+The sales team sees only **MT** and **points** — all **gift names, gift value (₹) and
+costing** are hidden. To reveal them, open the sidebar (☰ on mobile) → **Admin** → enter
+the password → **Unlock**.
 
 Set the password via Streamlit secrets (do **not** commit it). On Streamlit Community
-Cloud: app → **Settings → Secrets**, add:
+Cloud: app → **Settings → Secrets**, add (set it on **each** app):
 
 ```toml
 admin_password = "your-secret-here"
 ```
 
-Locally, create `.streamlit/secrets.toml` (already git-ignored) with the same line.
-If no secret is set, the fallback password is `east-admin-2026` — change it before sharing.
+Locally, create `.streamlit/secrets.toml` (git-ignored). If unset, the fallback is
+`east-admin-2026` — change it before sharing.
 
 ## Run locally
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run app.py                  # East
+streamlit run app_north_central.py    # North & Central
 ```
 
-## Using the dashboard
+## Using a dashboard
 
-- Filter **Zone → State → Distributor → Dealer**. Pick a single dealer to see metric
-  cards (Total MT, Points, Gift Value), qualifying / early-bird status, progress to the
-  next milestone, and full billing history.
-- Leave filters on "All" to get a roll-up overview and a scannable dealer list.
+Filter **(Zone →) State → Distributor → Dealer**. Pick a single dealer for metric cards
+(MT, Points, and — admin — Gift Value + qualified gift), progress to the next milestone,
+and billing detail. Leave filters on "All" for the KPI band, leaderboard, push list
+(8–12 MT) and the full dealer table.
