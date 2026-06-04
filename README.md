@@ -37,9 +37,13 @@ Per scheme, under `data/<scheme>/`:
   - `may_transactions.csv` — May, date-wise (frozen): `Zone,State,Distributor,Dealer,Date,MT`.
   - `june_secondary.csv` — June month-to-date aggregate: `Zone,State,Distributor,Dealer,MT`.
   - `gifts.csv` — gift catalog per MT tier.
-- **North & Central** (`data/north_central/`):
-  - `secondary.csv` — month-to-date aggregate (no dates, no early bird): `Zone,State,Distributor,Dealer,MT`.
+- **North & Central** (`data/north_central/`) — no dates / no early bird, so each file is
+  a per-dealer aggregate that the app **sums**:
+  - `may_secondary.csv` — May totals (frozen). `Zone,State,Distributor,Dealer,MT,SF_Id`.
+  - `june_secondary.csv` — June month-to-date (replaced on each refresh). Same columns.
   - `gifts.csv` — gift catalog per MT tier.
+  - `SF_Id` is carried only to align a dealer's June row to its May attributes (so the two
+    months sum to one dealer); the app ignores the column otherwise.
 
 ### Updating the data
 Send Claude the latest secondary-sales export (columns `Zone, SF Id, Company Name,

@@ -50,5 +50,5 @@ NORTH_CENTRAL = Scheme(
     early_bird=False,
     data_dir=DATA / "north_central",
     dated_files=(),
-    agg_files=("secondary.csv",),
+    agg_files=("may_secondary.csv", "june_secondary.csv"),
 )
