@@ -2,8 +2,21 @@
 zone-scheme defined in schemes.py."""
 import base64
 import html
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+IST = timezone(timedelta(hours=5, minutes=30))  # report dates in India time
+
+
+def _ordinal(n: int) -> str:
+    suf = "th" if 11 <= (n % 100) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n:02d}{suf}"
+
+
+def _till_date() -> str:
+    """Yesterday (T-1) in IST, e.g. '03rd June 2026'."""
+    y = (datetime.now(IST) - timedelta(days=1)).date()
+    return f"{_ordinal(y.day)} {y.strftime('%B %Y')}"
 
 import pandas as pd
 import streamlit as st
@@ -268,7 +281,7 @@ def render(scheme: Scheme):
         f'<div class="hero"><div class="hero-row">{_logo_img()}'
         f'<div class="hero-txt"><h1>{scheme.title}</h1>'
         f'<div class="sub">{int(PPM)} pts/MT · {rate}{eb_txt}qualify at {int(MIN)} MT</div></div></div>'
-        f'<span class="pill">Dealer qualifying status · updated till Today -1</span></div>',
+        f'<span class="pill">Dealer qualifying status · updated till {_till_date()}</span></div>',
         unsafe_allow_html=True)
 
     if dealers.empty:
