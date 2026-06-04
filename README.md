@@ -31,9 +31,23 @@ The repo currently has **sample rows** — replace them with real data. Dates ca
 them by the 20 May cutoff automatically.
 
 ### Updating the data
-Just give the new volume data to Claude (Zone / State / Distributor / Dealer / Date / MT)
-and it will update `data/transactions.csv` and push. Streamlit Cloud redeploys the same
-URL within a minute — the team always sees the latest on the existing link.
+The dashboard reads one file, `data/transactions.csv` (`Zone, State, Distributor,
+Dealer, Date, MT`), but volume arrives in two shapes:
+
+- **May 2026 — date-wise (frozen).** Each billing is its own row with its real date, so
+  the 20-May early-bird split is exact. These rows are not touched again.
+- **June 2026 onward — monthly aggregate.** Source file columns: `Zone, SF Id, Company
+  Name, Secondary Sales in <Month>'26, State Name, Corrected Distributor Name`. Claude
+  filters `Zone = East`, maps each dealer to one row dated within that month (June is
+  always after the 20-May cutoff, so an exact date isn't needed), and **replaces** that
+  month's rows wholesale on every refresh — so re-sending an updated June file never
+  double-counts.
+
+Just send Claude the latest file (either shape) and it updates `data/transactions.csv`
+and pushes. Streamlit Cloud redeploys the same URL within a minute.
+
+> Note: the original May export ran through 2 June, so early June volume was already in
+> the DB; the June aggregate file replaces those rows rather than adding to them.
 
 ## Deploy once (so the team gets a shareable link)
 
