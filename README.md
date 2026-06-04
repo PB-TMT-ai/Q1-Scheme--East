@@ -18,36 +18,30 @@ what's left to qualify.
 
 ## The data
 
-All volume lives in [`data/transactions.csv`](data/transactions.csv), one row per
-billing:
+Volume lives in **two separate files** under `data/`, combined by the app per dealer:
 
-```
-Zone,State,Distributor,Dealer,Date,MT
-East,West Bengal,Kolkata Traders,Acme Hardware,2026-05-10,30
-```
+- [`may_transactions.csv`](data/may_transactions.csv) — **May, date-wise (frozen).**
+  `Zone,State,Distributor,Dealer,Date,MT`, one row per billing. The real dates keep the
+  20-May early-bird split exact. Not touched again.
+- [`june_secondary.csv`](data/june_secondary.csv) — **June month-to-date aggregate.**
+  `Zone,State,Distributor,Dealer,MT`, one row per dealer (June is entirely after the
+  20-May cutoff, so no dates needed).
 
-The repo currently has **sample rows** — replace them with real data. Dates can be
-`DD-MM-YYYY` or `YYYY-MM-DD`. The dashboard adds up each dealer's billings and splits
-them by the 20 May cutoff automatically.
+The scheme gift catalog is in [`data/gifts.csv`](data/gifts.csv) (per MT tier); the full
+scheme is preserved in [`docs/SCHEME.md`](docs/SCHEME.md) and
+[`docs/Q1_scheme_East.xlsx`](docs/Q1_scheme_East.xlsx).
 
 ### Updating the data
-The dashboard reads one file, `data/transactions.csv` (`Zone, State, Distributor,
-Dealer, Date, MT`), but volume arrives in two shapes:
+- **June (daily):** send Claude the latest secondary-sales export (columns `Zone, SF Id,
+  Company Name, Secondary Sales in <Month>'26, State Name, Corrected Distributor Name`).
+  Claude filters `Zone = East`, normalizes the distributor names, and **replaces**
+  `june_secondary.csv` wholesale — so re-feeding daily never double-counts.
+- **May:** frozen; only revisit if a correction is needed.
 
-- **May 2026 — date-wise (frozen).** Each billing is its own row with its real date, so
-  the 20-May early-bird split is exact. These rows are not touched again.
-- **June 2026 onward — monthly aggregate.** Source file columns: `Zone, SF Id, Company
-  Name, Secondary Sales in <Month>'26, State Name, Corrected Distributor Name`. Claude
-  filters `Zone = East`, maps each dealer to one row dated within that month (June is
-  always after the 20-May cutoff, so an exact date isn't needed), and **replaces** that
-  month's rows wholesale on every refresh — so re-sending an updated June file never
-  double-counts.
+Streamlit Cloud redeploys the same URL within a minute of each push.
 
-Just send Claude the latest file (either shape) and it updates `data/transactions.csv`
-and pushes. Streamlit Cloud redeploys the same URL within a minute.
-
-> Note: the original May export ran through 2 June, so early June volume was already in
-> the DB; the June aggregate file replaces those rows rather than adding to them.
+> Note: the original May export ran through 2 June, so that early-June volume now lives in
+> `june_secondary.csv`, not the May file.
 
 ## Deploy once (so the team gets a shareable link)
 
@@ -60,9 +54,9 @@ and pushes. Streamlit Cloud redeploys the same URL within a minute.
 
 ## Admin / costing access
 
-The sales team sees only **volume (MT)** and **points** — all **gift value (₹) / costing**
-is hidden. To reveal it, open the sidebar (☰ on mobile) → **Admin** → enter the password
-→ **Unlock**.
+The sales team sees only **volume (MT)** and **points** — all **gift names, gift value (₹)
+and costing** are hidden. To reveal them (qualified gift per dealer, gift cost, next-gift
+target), open the sidebar (☰ on mobile) → **Admin** → enter the password → **Unlock**.
 
 Set the password via Streamlit secrets (do **not** commit it). On Streamlit Community
 Cloud: app → **Settings → Secrets**, add:

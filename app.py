@@ -1,7 +1,12 @@
 """
 Q1 Scheme - East: Dealer Status Dashboard
 Mobile-friendly Streamlit app showing where each dealer stands on the Q1 FY26
-volume scheme. Data is read from data/transactions.csv.
+volume scheme.
+
+Data sources (data/):
+  - may_transactions.csv : May billings, date-wise (Zone,State,Distributor,Dealer,Date,MT)
+  - june_secondary.csv   : June month-to-date aggregate (Zone,State,Distributor,Dealer,MT)
+  - gifts.csv            : scheme gift catalog per MT tier (admin-only display)
 """
 import html
 from datetime import date, datetime
@@ -21,7 +26,10 @@ MIN_MT = 12                 # minimum total MT to qualify for any points
 EB_DATE = date(2026, 5, 20)  # early-bird cutoff: billings on/before this date
 TIERS = [12, 24, 36, 48, 60, 80, 100]  # reference milestones (MT)
 
-DATA_PATH = Path(__file__).parent / "data" / "transactions.csv"
+DATA_DIR = Path(__file__).parent / "data"
+MAY_PATH = DATA_DIR / "may_transactions.csv"
+JUNE_PATH = DATA_DIR / "june_secondary.csv"
+GIFTS_PATH = DATA_DIR / "gifts.csv"
 
 st.set_page_config(
     page_title="Q1 Scheme – East | Dealer Status",
@@ -97,6 +105,10 @@ st.markdown(
       .pbar {{ background:#EAEEF3; border-radius:999px; height:10px; margin:8px 0 4px; overflow:hidden; }}
       .pbar > div {{ height:100%; background:linear-gradient(90deg,{NAVY},#0A5BA0); border-radius:999px; }}
       .ptext {{ font-size:.76rem; color:#6b7686; }}
+
+      .gift {{ background:#FFF8E7; border:1px solid #F4D58B; border-radius:12px;
+               padding:10px 12px; margin:10px 0 2px; font-size:.86rem; color:#5a4a1a; }}
+      .gift .gcost {{ display:block; margin-top:4px; font-size:.74rem; color:#8a6d2f; font-weight:700; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -106,28 +118,47 @@ st.markdown(
 # ----------------------------------------------------------------------------
 # Data loading & per-dealer calculation
 # ----------------------------------------------------------------------------
-@st.cache_data
-def load_transactions(mtime: float) -> pd.DataFrame:
-    """Load and normalize the transactions CSV. `mtime` busts the cache when
-    the file changes on disk."""
-    df = pd.read_csv(DATA_PATH, dtype=str)
-    df.columns = [c.strip() for c in df.columns]
+KEYS = ["Zone", "State", "Distributor", "Dealer"]
 
-    for col in ["Zone", "State", "Distributor", "Dealer"]:
+
+@st.cache_data
+def load_may(mtime: float) -> pd.DataFrame:
+    """May billings, date-wise."""
+    df = pd.read_csv(MAY_PATH, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+    for col in KEYS:
         df[col] = df[col].fillna("").astype(str).str.strip()
 
-    # Parse dates. Year-first strings (ISO, e.g. 2026-05-10) are parsed as-is;
-    # everything else is treated as day-first (Indian DD-MM-YYYY, e.g. 10-05-2026).
+    # Year-first strings (ISO) parsed as-is; everything else as day-first (DD-MM-YYYY).
     raw = df["Date"].fillna("").astype(str).str.strip()
     iso_mask = raw.str.match(r"^\d{4}[-/.]")
     parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
     parsed[iso_mask] = pd.to_datetime(raw[iso_mask], errors="coerce", dayfirst=False)
     parsed[~iso_mask] = pd.to_datetime(raw[~iso_mask], errors="coerce", dayfirst=True)
     df["Date"] = parsed
-
     df["MT"] = pd.to_numeric(df["MT"], errors="coerce")
-    df = df[(df["Dealer"] != "") & df["MT"].notna()].copy()
-    return df
+    return df[(df["Dealer"] != "") & df["MT"].notna()].copy()
+
+
+@st.cache_data
+def load_june(mtime: float) -> pd.DataFrame:
+    """June month-to-date aggregate (one row per dealer, no dates)."""
+    if not JUNE_PATH.exists():
+        return pd.DataFrame(columns=KEYS + ["MT"])
+    df = pd.read_csv(JUNE_PATH, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+    for col in KEYS:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+    df["MT"] = pd.to_numeric(df["MT"], errors="coerce")
+    return df[(df["Dealer"] != "") & df["MT"].notna()].copy()
+
+
+@st.cache_data
+def load_gifts(mtime: float) -> pd.DataFrame:
+    """Gift catalog per MT tier."""
+    g = pd.read_csv(GIFTS_PATH)
+    g.columns = [c.strip() for c in g.columns]
+    return g.sort_values("MT").reset_index(drop=True)
 
 
 def _dealer_points(v_eb: float, v_after: float) -> tuple[float, bool, bool]:
@@ -143,25 +174,32 @@ def _dealer_points(v_eb: float, v_after: float) -> tuple[float, bool, bool]:
 
 @st.cache_data
 def aggregate_dealers(mtime: float) -> pd.DataFrame:
-    """Roll transactions up to one row per dealer with scheme metrics."""
-    df = load_transactions(mtime)
+    """Combine May (date-wise) + June (aggregate) into one row per dealer.
+
+    Early-bird volume = May billings on/before 20 May. Everything else
+    (May after 20 May, undated May, and all June) is 'after'."""
+    may = load_may(mtime)
+    june = load_june(mtime)
     eb_cutoff = pd.Timestamp(EB_DATE)
 
-    rows = []
-    keys = ["Zone", "State", "Distributor", "Dealer"]
-    for key_vals, g in df.groupby(keys, dropna=False):
-        v_eb = g.loc[g["Date"] <= eb_cutoff, "MT"].sum()
-        v_after = g.loc[g["Date"] > eb_cutoff, "MT"].sum()
-        v_after += g.loc[g["Date"].isna(), "MT"].sum()
-        v_total = v_eb + v_after
+    eb = (may[may["Date"] <= eb_cutoff].groupby(KEYS)["MT"].sum())
+    after_may = (may[~(may["Date"] <= eb_cutoff)].groupby(KEYS)["MT"].sum())
+    after_jun = june.groupby(KEYS)["MT"].sum() if not june.empty else pd.Series(dtype=float)
 
+    idx = eb.index.union(after_may.index).union(after_jun.index)
+    eb = eb.reindex(idx, fill_value=0.0)
+    after = after_may.reindex(idx, fill_value=0.0).add(
+        after_jun.reindex(idx, fill_value=0.0), fill_value=0.0)
+
+    rows = []
+    for key_vals, v_eb, v_after in zip(idx, eb.values, after.values):
         points, qualified, eb_applied = _dealer_points(v_eb, v_after)
         rows.append(
             {
                 "Zone": key_vals[0], "State": key_vals[1],
                 "Distributor": key_vals[2], "Dealer": key_vals[3],
                 "MT_eb": round(v_eb, 2), "MT_after": round(v_after, 2),
-                "Total MT": round(v_total, 2),
+                "Total MT": round(v_eb + v_after, 2),
                 "Points": round(points, 0),
                 "Gift Value": round(points * GIFT_PER_POINT, 0),
                 "Qualified": qualified,
@@ -172,6 +210,21 @@ def aggregate_dealers(mtime: float) -> pd.DataFrame:
     if not out.empty:
         out = out.sort_values("Total MT", ascending=False).reset_index(drop=True)
     return out
+
+
+def gift_for(total_mt: float, gifts: pd.DataFrame):
+    """Highest gift tier reached. Returns a row (Series) or None."""
+    elig = gifts[gifts["MT"] <= total_mt]
+    return elig.iloc[-1] if not elig.empty else None
+
+
+def next_gift(total_mt: float, gifts: pd.DataFrame):
+    """Next gift tier not yet reached. Returns (row, mt_needed) or (None, 0)."""
+    nxt = gifts[gifts["MT"] > total_mt]
+    if nxt.empty:
+        return None, 0.0
+    row = nxt.iloc[0]
+    return row, row["MT"] - total_mt
 
 
 def next_milestone(total_mt: float) -> tuple[int | None, float]:
@@ -246,12 +299,14 @@ def admin_gate() -> bool:
 # ----------------------------------------------------------------------------
 # Header
 # ----------------------------------------------------------------------------
-if not DATA_PATH.exists():
-    st.error("No data file found at data/transactions.csv.")
+if not MAY_PATH.exists():
+    st.error("No data file found at data/may_transactions.csv.")
     st.stop()
 
-mtime = DATA_PATH.stat().st_mtime
+# Cache key reflects the newest of the data files so edits refresh the app.
+mtime = max(p.stat().st_mtime for p in (MAY_PATH, JUNE_PATH, GIFTS_PATH) if p.exists())
 dealers = aggregate_dealers(mtime)
+gifts = load_gifts(mtime)
 last_updated = datetime.fromtimestamp(mtime).strftime("%d %b %Y")
 admin = admin_gate()
 
@@ -379,17 +434,39 @@ def dealer_detail(r, admin: bool):
     elif r["Qualified"]:
         st.caption(f"No early-bird bonus (only {mt_fmt(r['MT_eb'])} MT billed by {EB_DATE.strftime('%d %b')}; needs ≥{MIN_MT} MT).")
 
-    # billing history
-    txn = load_transactions(mtime)
-    mask = ((txn["Distributor"] == r["Distributor"]) & (txn["Dealer"] == r["Dealer"])
-            & (txn["State"] == r["State"]))
-    dt = txn[mask].sort_values("Date").copy()
-    dt["Window"] = dt["Date"].apply(
-        lambda d: "≤ 20 May (early bird)" if pd.notna(d) and d <= pd.Timestamp(EB_DATE) else "after 20 May"
-    )
-    dt["Date"] = dt["Date"].dt.strftime("%d %b %Y").fillna("—")
-    with st.expander(f"Billing history ({len(dt)} entries)"):
-        st.dataframe(dt[["Date", "MT", "Window"]], hide_index=True, width="stretch")
+    # qualified gift — admin only
+    if admin and r["Qualified"]:
+        g = gift_for(r["Total MT"], gifts)
+        if g is not None:
+            alt = (f' <i>or</i> {html.escape(str(g["AltGift"]))}'
+                   if str(g.get("AltGift", "")).strip() else "")
+            st.markdown(
+                f'<div class="gift">🎁 <b>Qualified gift</b> · {int(g["MT"])} MT tier<br>'
+                f'{html.escape(str(g["Gift"]))}{alt}'
+                f'<span class="gcost">gift cost ₹{inr(g["Cost"])}</span></div>',
+                unsafe_allow_html=True,
+            )
+        ng, need = next_gift(r["Total MT"], gifts)
+        if ng is not None:
+            st.caption(f"➕ {mt_fmt(need)} MT more unlocks the {int(ng['MT'])} MT gift: {ng['Gift']}.")
+
+    # billing history (May date-wise + June month-to-date)
+    may = load_may(mtime)
+    jun = load_june(mtime)
+    sel = lambda d: ((d["Distributor"] == r["Distributor"]) & (d["Dealer"] == r["Dealer"])
+                     & (d["State"] == r["State"]))
+    hist = []
+    for _, x in may[sel(may)].sort_values("Date").iterrows():
+        win = ("≤ 20 May (early bird)" if pd.notna(x["Date"]) and x["Date"] <= pd.Timestamp(EB_DATE)
+               else "after 20 May")
+        hist.append({"Date": x["Date"].strftime("%d %b %Y") if pd.notna(x["Date"]) else "—",
+                     "MT": x["MT"], "Window": win})
+    jmt = jun[sel(jun)]["MT"].sum() if not jun.empty else 0.0
+    if jmt > 0:
+        hist.append({"Date": "June (month-to-date)", "MT": round(jmt, 2), "Window": "after 20 May"})
+    hist = pd.DataFrame(hist)
+    with st.expander(f"Billing history ({len(hist)} entries)"):
+        st.dataframe(hist, hide_index=True, width="stretch")
 
 
 # ----------------------------------------------------------------------------
@@ -421,8 +498,10 @@ else:
         show["Points"] = show["Points"].apply(inr)
         cols = ["Dealer", "Distributor", "State", "Total MT", "Points"]
         if admin:
+            show["Qualified Gift"] = show["Total MT"].apply(
+                lambda t: (gift_for(t, gifts)["Gift"] if gift_for(t, gifts) is not None else "—"))
             show["Gift Value"] = show["Gift Value"].apply(lambda x: "₹" + inr(x))
-            cols.append("Gift Value")
+            cols += ["Qualified Gift", "Gift Value"]
         cols.append("Status")
         st.dataframe(show[cols], hide_index=True, width="stretch")
         st.caption("Tip: pick a Dealer in the filter above for full details and billing history.")
