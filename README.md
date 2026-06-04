@@ -4,6 +4,15 @@ Mobile-friendly dashboards so each zone's sales team can check, on their phones,
 every dealer stands on the Q1 FY27 volume scheme — MT done, points earned, and what's
 left to qualify. One codebase, **scheme-driven**: each zone is pure config.
 
+## Live links
+
+| Zone | Entry file | URL |
+|---|---|---|
+| East | `app.py` | https://q1-scheme--east-twhgn52coprhjw4ffsps4u.streamlit.app/ |
+| North & Central | `app_north_central.py` | https://q1-scheme--east-evsh2qyag3uhjx46llltsv.streamlit.app/ |
+
+Both deploy from this one repo; each data push refreshes the matching link automatically.
+
 ## Schemes
 
 | | **East** | **North & Central** |
