@@ -28,7 +28,7 @@ class Scheme:
 
 EAST = Scheme(
     key="east",
-    title="⚡ Q1 Scheme · East",
+    title="⚡ Power Play (Q1) Scheme · East",
     region="East",
     points_per_mt=50,
     gift_per_point=12,
@@ -42,7 +42,7 @@ EAST = Scheme(
 
 NORTH_CENTRAL = Scheme(
     key="north_central",
-    title="⚡ Q1 Scheme · North & Central",
+    title="⚡ Power Play (Q1) Scheme · North & Central",
     region="North & Central",
     points_per_mt=35,
     gift_per_point=10,

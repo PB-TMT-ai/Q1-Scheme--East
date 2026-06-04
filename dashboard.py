@@ -1,5 +1,6 @@
 """Scheme-driven dashboard renderer. `render(scheme)` draws the whole mobile UI for any
 zone-scheme defined in schemes.py."""
+import base64
 import html
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,17 @@ from schemes import Scheme
 
 KEYS = ["Zone", "State", "Distributor", "Dealer"]
 NAVY, ACCENT, GREEN, AMBER, RED = "#003C71", "#F5A623", "#1E8E3E", "#F9A825", "#D93025"
+LOGO_PATH = Path(__file__).parent / "assets" / "jsw_logo.svg"
+
+
+def _logo_img() -> str:
+    """Return an <img> tag with the JSW logo embedded, or '' if missing."""
+    if not LOGO_PATH.exists():
+        return ""
+    data = LOGO_PATH.read_bytes()
+    mime = "image/svg+xml" if LOGO_PATH.suffix == ".svg" else f"image/{LOGO_PATH.suffix.lstrip('.')}"
+    b64 = base64.b64encode(data).decode()
+    return f'<img class="logo" src="data:{mime};base64,{b64}" alt="JSW"/>'
 
 
 # ----------------------------------------------------------------------------
@@ -152,7 +164,11 @@ def _css():
       #MainMenu, footer {{ visibility: hidden; }}
       .hero {{ background: linear-gradient(135deg,{NAVY} 0%,#0A5BA0 100%); color:#fff;
                border-radius:16px; padding:16px 18px; margin-bottom:14px; }}
-      .hero h1 {{ font-size:1.35rem; margin:0; font-weight:800; letter-spacing:.2px; }}
+      .hero-row {{ display:flex; align-items:center; gap:12px; }}
+      .hero-txt {{ min-width:0; }}
+      .hero .logo {{ height:46px; width:auto; flex:0 0 auto; border-radius:8px;
+                     box-shadow:0 1px 3px rgba(0,0,0,.18); }}
+      .hero h1 {{ font-size:1.3rem; margin:0; font-weight:800; letter-spacing:.2px; }}
       .hero .sub {{ font-size:.82rem; opacity:.92; margin-top:4px; }}
       .hero .pill {{ display:inline-block; background:rgba(255,255,255,.18); border-radius:999px;
                      padding:2px 10px; font-size:.72rem; font-weight:700; margin-top:8px; }}
@@ -223,7 +239,7 @@ def _admin_gate() -> bool:
 # Render
 # ----------------------------------------------------------------------------
 def render(scheme: Scheme):
-    st.set_page_config(page_title=f"{scheme.region} | Q1 Scheme", page_icon="📊", layout="centered")
+    st.set_page_config(page_title=f"Power Play (Q1) · {scheme.region}", page_icon="📊", layout="centered")
     _css()
 
     dated_paths = scheme.paths(scheme.dated_files)
@@ -249,9 +265,10 @@ def render(scheme: Scheme):
     rate = f"₹{int(GPP)}/pt · " if admin else ""
     eb_txt = (f"+25% early-bird by {scheme.eb_date.strftime('%d %b %Y')} · " if EB else "")
     st.markdown(
-        f'<div class="hero"><h1>{scheme.title}</h1>'
-        f'<div class="sub">{int(PPM)} pts/MT · {rate}{eb_txt}qualify at {int(MIN)} MT</div>'
-        f'<span class="pill">Dealer qualifying status · updated {last_updated}</span></div>',
+        f'<div class="hero"><div class="hero-row">{_logo_img()}'
+        f'<div class="hero-txt"><h1>{scheme.title}</h1>'
+        f'<div class="sub">{int(PPM)} pts/MT · {rate}{eb_txt}qualify at {int(MIN)} MT</div></div></div>'
+        f'<span class="pill">Dealer qualifying status · updated till Today -1</span></div>',
         unsafe_allow_html=True)
 
     if dealers.empty:
