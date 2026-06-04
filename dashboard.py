@@ -232,9 +232,56 @@ def _admin_password() -> str:
         return "east-admin-2026"
 
 
+def _credentials() -> dict:
+    """Team logins as {username: password}. From st.secrets['users'] table, or a
+    single app_username/app_password, or a safe fallback."""
+    try:
+        users = dict(st.secrets["users"])
+        if users:
+            return {str(k): str(v) for k, v in users.items()}
+    except Exception:
+        pass
+    try:
+        return {str(st.secrets.get("app_username", "sales")): str(st.secrets["app_password"])}
+    except Exception:
+        return {"sales": "powerplay2026"}
+
+
+def _login_gate(scheme):
+    """Block the whole dashboard until a valid team username+password is entered."""
+    if st.session_state.get("auth"):
+        return
+    st.markdown(
+        f'<div class="hero"><div class="hero-row">{_logo_img()}'
+        f'<div class="hero-txt"><h1>{scheme.title}</h1>'
+        f'<div class="sub">Sales team login</div></div></div></div>',
+        unsafe_allow_html=True)
+    with st.form("login"):
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        ok = st.form_submit_button("Log in")
+    if ok:
+        creds = _credentials()
+        if u in creds and p and p == creds[u]:
+            st.session_state.auth = True
+            st.session_state.user = u
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+    st.caption("Access is restricted to the JSW One sales team. Contact your manager for credentials.")
+    st.stop()
+
+
 def _admin_gate() -> bool:
     st.session_state.setdefault("admin", False)
     with st.sidebar:
+        if st.session_state.get("auth"):
+            st.caption(f"👤 Logged in as **{st.session_state.get('user', '')}**")
+            if st.button("Log out of dashboard"):
+                for k in ("auth", "user", "admin"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+            st.divider()
         st.markdown("### 🔒 Admin")
         if st.session_state.admin:
             st.success("Admin mode — costing visible")
@@ -257,6 +304,7 @@ def _admin_gate() -> bool:
 def render(scheme: Scheme):
     st.set_page_config(page_title=f"Power Play (Q1) · {scheme.region}", page_icon="📊", layout="centered")
     _css()
+    _login_gate(scheme)
 
     dated_paths = scheme.paths(scheme.dated_files)
     agg_paths = scheme.paths(scheme.agg_files)

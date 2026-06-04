@@ -73,21 +73,37 @@ same repo:
 
 Share each link with the matching team. They open it in any mobile browser — no login.
 
-## Admin / costing access
+## Access & login
 
-The sales team sees only **MT** and **points** — all **gift names, gift value (₹) and
-costing** are hidden. To reveal them, open the sidebar (☰ on mobile) → **Admin** → enter
-the password → **Unlock**.
+Two layers:
 
-Set the password via Streamlit secrets (do **not** commit it). On Streamlit Community
-Cloud: app → **Settings → Secrets**, add (set it on **each** app):
+1. **Team login (whole dashboard).** Every visitor must log in with a username + password
+   before seeing anything.
+2. **Admin unlock (costing).** After login, the sidebar **Admin** unlock reveals gift
+   names, gift value (₹) and the Summary tab. Sales users leave it closed.
+
+Set credentials via Streamlit secrets (do **not** commit them) — on **each** app:
+**Settings → Secrets**:
 
 ```toml
-admin_password = "your-secret-here"
+# admin unlock (costing)
+admin_password = "your-admin-secret"
+
+# team login — option A: one shared login
+app_username = "sales"
+app_password = "your-team-secret"
+
+# team login — option B: multiple logins (overrides option A)
+[users]
+east_team = "pass1"
+nc_team   = "pass2"
 ```
 
-Locally, create `.streamlit/secrets.toml` (git-ignored). If unset, the fallback is
-`east-admin-2026` — change it before sharing.
+Locally, put the same in `.streamlit/secrets.toml` (git-ignored). Fallbacks if unset:
+team `sales` / `powerplay2026`, admin `east-admin-2026` — **change these before sharing.**
+
+> Note: this is shared-password protection (good for a field team), not enterprise SSO.
+> Sessions don't persist a cookie, so users log in again when they reopen/refresh the link.
 
 ## Run locally
 
