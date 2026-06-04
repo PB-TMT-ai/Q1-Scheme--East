@@ -25,17 +25,20 @@ from schemes import Scheme
 
 KEYS = ["Zone", "State", "Distributor", "Dealer"]
 NAVY, ACCENT, GREEN, AMBER, RED = "#003C71", "#F5A623", "#1E8E3E", "#F9A825", "#D93025"
-LOGO_PATH = Path(__file__).parent / "assets" / "jsw_logo.svg"
+ASSETS = Path(__file__).parent / "assets"
+# First match wins: a real PNG/JPG logo takes priority over the SVG placeholder.
+LOGO_CANDIDATES = ("jsw_logo.png", "jsw_logo.jpg", "jsw_logo.jpeg", "jsw_logo.svg")
+_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml"}
 
 
 def _logo_img() -> str:
-    """Return an <img> tag with the JSW logo embedded, or '' if missing."""
-    if not LOGO_PATH.exists():
-        return ""
-    data = LOGO_PATH.read_bytes()
-    mime = "image/svg+xml" if LOGO_PATH.suffix == ".svg" else f"image/{LOGO_PATH.suffix.lstrip('.')}"
-    b64 = base64.b64encode(data).decode()
-    return f'<img class="logo" src="data:{mime};base64,{b64}" alt="JSW"/>'
+    """Return an <img> tag embedding the first logo file found in assets/, or ''."""
+    for name in LOGO_CANDIDATES:
+        p = ASSETS / name
+        if p.exists():
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            return f'<img class="logo" src="data:{_MIME[p.suffix.lower()]};base64,{b64}" alt="JSW One"/>'
+    return ""
 
 
 # ----------------------------------------------------------------------------
