@@ -314,13 +314,16 @@ def render(scheme: Scheme):
         _dealer_detail(scheme, scope.iloc[0], admin, gifts, dated, agg)
     else:
         _kpi_band(scheme, scope, admin)
-        t1, t2, t3 = st.tabs(["🏆 Leaderboard", "🎯 Push list", "📋 All dealers"])
-        with t1:
+        labels = ["🏆 Leaderboard", "🎯 Push list", "📋 All dealers"]
+        if admin:
+            labels.append("💰 Summary")
+        tabs = st.tabs(labels)
+        with tabs[0]:
             top = scope.sort_values(["Points", "Total MT"], ascending=False).head(15)
             st.markdown(_rows(scheme, top, admin, ranked=True), unsafe_allow_html=True)
             eb_leg = "🟢 early bird · " if EB else ""
             st.caption(f"Top 15 by points. {eb_leg}🔵 qualified · 🟠 almost (8–12 MT) · 🔴 not qualified")
-        with t2:
+        with tabs[1]:
             push = scope[(scope["Total MT"] >= 8) & (scope["Total MT"] < MIN)] \
                 .sort_values("Total MT", ascending=False)
             if push.empty:
@@ -328,7 +331,7 @@ def render(scheme: Scheme):
             else:
                 st.markdown(f"**{len(push)} dealers** are 8–12 MT — one push gets them qualified:")
                 st.markdown(_rows(scheme, push, admin, ranked=False, note="push"), unsafe_allow_html=True)
-        with t3:
+        with tabs[2]:
             show = scope.copy()
             show["Status"] = show.apply(lambda r: status_of(scheme, r)[1], axis=1)
             show["Points"] = show["Points"].apply(inr)
@@ -341,6 +344,70 @@ def render(scheme: Scheme):
             cols.append("Status")
             st.dataframe(show[cols], hide_index=True, width="stretch")
             st.caption("Tip: pick a Dealer in the filter above for full details.")
+        if admin:
+            with tabs[3]:
+                _summary(scheme, scope, gifts, multi_zone)
+
+
+def _summary(scheme, scope, gifts, multi_zone):
+    """Admin-only roll-up: totals + breakdown by State / Distributor / Gift,
+    with estimated running gift cost (each qualified dealer at full catalogue value)."""
+    df = scope.copy()
+    tiers = gifts.sort_values("MT")
+    cost_of = {int(r.MT): int(r.Cost) for _, r in tiers.iterrows()}
+    name_of = {0: "No gift", **{int(r.MT): f"{int(r.MT)} MT · {r.Gift}" for _, r in tiers.iterrows()}}
+
+    def tier_mt(t, q):
+        g = gift_for(t, gifts) if q else None
+        return int(g["MT"]) if g is not None else 0
+    df["TierMT"] = [tier_mt(t, q) for t, q in zip(df["Total MT"], df["Qualified"])]
+    df["GiftCost"] = df["TierMT"].map(lambda m: cost_of.get(m, 0))
+
+    tot_d, tot_q = len(df), int(df["Qualified"].sum())
+    tot_v = df["Total MT"].sum()
+    qual_v = df.loc[df["Qualified"], "Total MT"].sum()
+    run_cost = int(df["GiftCost"].sum())
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Dealers (qual / total)", f"{tot_q} / {tot_d}")
+    c2.metric("Total MT", mt_fmt(tot_v))
+    c3.metric("Qualified MT", mt_fmt(qual_v))
+    st.metric("Est. running gift cost (at max value)", "₹" + inr(run_cost),
+              help="Each qualified dealer's tier gift at full catalogue cost (incl. TDS).")
+
+    dim = st.radio("Break down by", ["State", "Distributor", "Gift"], horizontal=True)
+
+    if dim == "Gift":
+        grp = df.groupby("TierMT")
+        out = pd.DataFrame({
+            "Dealers": grp["Dealer"].count(),
+            "Total MT": grp["Total MT"].sum(),
+            "Est. Cost ₹": grp["GiftCost"].sum(),
+        }).reset_index().sort_values("TierMT")
+        out["Gift"] = out["TierMT"].map(name_of)
+        out["Total MT"] = out["Total MT"].map(mt_fmt)
+        out["Est. Cost ₹"] = out["Est. Cost ₹"].map(lambda x: "₹" + inr(x))
+        st.dataframe(out[["Gift", "Dealers", "Total MT", "Est. Cost ₹"]],
+                     hide_index=True, width="stretch")
+        st.caption("Est. cost = dealers × gift catalogue cost (max value, incl. TDS). "
+                   "'No gift' = below 12 MT.")
+    else:
+        col = dim
+        grp = df.groupby(col)
+        out = pd.DataFrame({
+            "Dealers": grp["Dealer"].count(),
+            "Qualified": grp["Qualified"].sum().astype(int),
+            "Total MT": grp["Total MT"].sum(),
+            "Est. Cost ₹": grp["GiftCost"].sum(),
+        })
+        out["Qual. MT"] = df[df["Qualified"]].groupby(col)["Total MT"].sum()
+        out["Qual. MT"] = out["Qual. MT"].fillna(0)
+        out = out.reset_index().sort_values("Total MT", ascending=False)
+        out["Total MT"] = out["Total MT"].map(mt_fmt)
+        out["Qual. MT"] = out["Qual. MT"].map(mt_fmt)
+        out["Est. Cost ₹"] = out["Est. Cost ₹"].map(lambda x: "₹" + inr(x))
+        st.dataframe(out[[col, "Dealers", "Qualified", "Total MT", "Qual. MT", "Est. Cost ₹"]],
+                     hide_index=True, width="stretch")
 
 
 def _kpi_band(scheme, df, admin):
