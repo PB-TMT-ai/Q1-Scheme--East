@@ -394,10 +394,63 @@ def render(scheme: Scheme):
             st.caption("Tip: pick a Dealer in the filter above for full details.")
         if admin:
             with tabs[3]:
-                _summary(scheme, scope, gifts, multi_zone)
+                _summary(scheme, scope, gifts, multi_zone, mtime)
 
 
-def _summary(scheme, scope, gifts, multi_zone):
+def _month_dataframes(scheme, mtime):
+    """Per-dealer MT split into May and June sources (by filename)."""
+    allfiles = list(scheme.dated_files) + list(scheme.agg_files)
+    may = scheme.paths([f for f in allfiles if "may" in f.lower()])
+    jun = scheme.paths([f for f in allfiles if "june" in f.lower()])
+    mdf = _load_agg(may, mtime) if may else pd.DataFrame(columns=KEYS + ["MT"])
+    jdf = _load_agg(jun, mtime) if jun else pd.DataFrame(columns=KEYS + ["MT"])
+    mdf = mdf.groupby(KEYS, as_index=False)["MT"].sum() if not mdf.empty else mdf
+    jdf = jdf.groupby(KEYS, as_index=False)["MT"].sum() if not jdf.empty else jdf
+    return mdf, jdf
+
+
+def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
+    """Distributor × State report with May / June / Total / Qualified splits."""
+    valid = set(scope[KEYS].itertuples(index=False, name=None))
+
+    def restrict(df):
+        if df.empty:
+            return df
+        keep = [t in valid for t in df[KEYS].itertuples(index=False, name=None)]
+        return df[keep]
+
+    md, jd = restrict(may_df), restrict(june_df)
+    keys = ["State", "Distributor"]
+
+    def ndealers(df):
+        return df[df["MT"] > 0].groupby(keys)["Dealer"].nunique() if not df.empty else pd.Series(dtype=int)
+
+    def vol(df):
+        return df.groupby(keys)["MT"].sum() if not df.empty else pd.Series(dtype=float)
+
+    qd = scope[scope["Qualified"]]
+    out = scope.groupby(keys).agg(TotDealers=("Dealer", "nunique"), TotVol=("Total MT", "sum"))
+    out["MayDealers"], out["MayVol"] = ndealers(md), vol(md)
+    out["JunDealers"], out["JunVol"] = ndealers(jd), vol(jd)
+    out["QualDealers"] = qd.groupby(keys)["Dealer"].nunique()
+    out["QualVol"] = qd.groupby(keys)["Total MT"].sum()
+    out = out.fillna(0).reset_index().sort_values("TotVol", ascending=False)
+
+    return pd.DataFrame({
+        "Distributor Name": out["Distributor"],
+        "State": out["State"],
+        "# May Dealers": out["MayDealers"].astype(int),
+        "May Vol (MT)": out["MayVol"].round(2),
+        "# June Dealers": out["JunDealers"].astype(int),
+        "June Vol (MT)": out["JunVol"].round(2),
+        "# Total Dealers Transacted": out["TotDealers"].astype(int),
+        "Total Vol (MT)": out["TotVol"].round(2),
+        "# Qualified dealers": out["QualDealers"].astype(int),
+        "Qualified Vol (MT)": out["QualVol"].round(2),
+    })
+
+
+def _summary(scheme, scope, gifts, multi_zone, mtime):
     """Admin-only roll-up: totals + breakdown by State / Distributor / Gift,
     with estimated running gift cost (each qualified dealer at full catalogue value)."""
     df = scope.copy()
@@ -456,6 +509,15 @@ def _summary(scheme, scope, gifts, multi_zone):
         out["Est. Cost ₹"] = out["Est. Cost ₹"].map(lambda x: "₹" + inr(x))
         st.dataframe(out[[col, "Dealers", "Qualified", "Total MT", "Qual. MT", "Est. Cost ₹"]],
                      hide_index=True, width="stretch")
+
+    # Distributor × State report: May vs June vs Total vs Qualified
+    st.divider()
+    st.markdown("**📦 Distributor-wise · May vs June**")
+    may_df, june_df = _month_dataframes(scheme, mtime)
+    dtable = _distributor_table(scope, may_df, june_df)
+    st.dataframe(dtable, hide_index=True, width="stretch")
+    st.download_button("⬇ Download (CSV)", dtable.to_csv(index=False),
+                       file_name=f"{scheme.key}_distributor_summary.csv", mime="text/csv")
 
 
 def _kpi_band(scheme, df, admin):
