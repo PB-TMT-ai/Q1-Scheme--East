@@ -428,7 +428,7 @@ def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
     out["QualVol"] = qd.groupby(keys)["Total MT"].sum()
     out = out.fillna(0).reset_index().sort_values("TotVol", ascending=False)
 
-    return pd.DataFrame({
+    disp = pd.DataFrame({
         "Distributor Name": out["Distributor"],
         "State": out["State"],
         "# May Dealers": out["MayDealers"].astype(int),
@@ -440,6 +440,10 @@ def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
         "# Qualified dealers": out["QualDealers"].astype(int),
         "Qualified Vol (MT)": out["QualVol"].round(2),
     })
+    total = {"Distributor Name": "TOTAL", "State": ""}
+    for c in disp.columns[2:]:
+        total[c] = round(float(disp[c].sum()), 2) if "Vol" in c else int(disp[c].sum())
+    return pd.concat([pd.DataFrame([total]), disp], ignore_index=True)
 
 
 def _summary(scheme, scope, gifts, multi_zone, mtime):
