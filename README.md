@@ -75,12 +75,13 @@ Share each link with the matching team. They open it in any mobile browser — n
 
 ## Access & login
 
-Two layers:
+**One login page decides the role from the password entered:**
 
-1. **Team login (whole dashboard).** Every visitor must log in with a username + password
-   before seeing anything.
-2. **Admin unlock (costing).** After login, the sidebar **Admin** unlock reveals gift
-   names, gift value (₹) and the Summary tab. Sales users leave it closed.
+- **Team password** → **Sales UI** (MT + points only).
+- **Admin password** (with any username) → **Admin UI** directly — gift names, gift value
+  (₹) and the Summary tab. No separate unlock step.
+
+Nothing is visible until a valid login. Role + log-out show in the sidebar.
 
 Set credentials via Streamlit secrets (do **not** commit them) — on **each** app:
 **Settings → Secrets**:

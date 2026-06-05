@@ -248,54 +248,45 @@ def _credentials() -> dict:
 
 
 def _login_gate(scheme):
-    """Block the whole dashboard until a valid team username+password is entered."""
+    """Single front-page login. The password decides the role:
+    team password -> Sales UI; admin password -> Admin UI (costing visible)."""
     if st.session_state.get("auth"):
         return
     st.markdown(
         f'<div class="hero"><div class="hero-row">{_logo_img()}'
         f'<div class="hero-txt"><h1>{scheme.title}</h1>'
-        f'<div class="sub">Sales team login</div></div></div></div>',
+        f'<div class="sub">Login</div></div></div></div>',
         unsafe_allow_html=True)
     with st.form("login"):
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
         ok = st.form_submit_button("Log in")
     if ok:
-        creds = _credentials()
-        if u in creds and p and p == creds[u]:
-            st.session_state.auth = True
-            st.session_state.user = u
+        creds, admin_pw = _credentials(), _admin_password()
+        if p and p == admin_pw:                       # admin password -> admin UI
+            st.session_state.update(auth=True, admin=True, user=(u.strip() or "admin"))
+            st.rerun()
+        elif u in creds and p and p == creds[u]:      # team login -> sales UI
+            st.session_state.update(auth=True, admin=False, user=u)
             st.rerun()
         else:
             st.error("Invalid username or password.")
-    st.caption("Access is restricted to the JSW One sales team. Contact your manager for credentials.")
+    st.caption("Sales team: use your team username & password. "
+               "Admins: enter the admin password to open the admin view.")
     st.stop()
 
 
-def _admin_gate() -> bool:
-    st.session_state.setdefault("admin", False)
+def _sidebar_account():
+    """Show who's logged in + role, with a log-out button."""
     with st.sidebar:
-        if st.session_state.get("auth"):
-            st.caption(f"👤 Logged in as **{st.session_state.get('user', '')}**")
-            if st.button("Log out of dashboard"):
-                for k in ("auth", "user", "admin"):
-                    st.session_state.pop(k, None)
-                st.rerun()
-            st.divider()
-        st.markdown("### 🔒 Admin")
-        if st.session_state.admin:
+        role = "Admin" if st.session_state.get("admin") else "Sales"
+        st.markdown(f"👤 **{st.session_state.get('user', '')}** · {role}")
+        if st.session_state.get("admin"):
             st.success("Admin mode — costing visible")
-            if st.button("Log out"):
-                st.session_state.admin = False; st.rerun()
-        else:
-            st.caption("Sales team: leave this closed. Admins unlock gift names / costing.")
-            pw = st.text_input("Admin password", type="password", key="pw")
-            if st.button("Unlock"):
-                if pw and pw == _admin_password():
-                    st.session_state.admin = True; st.rerun()
-                else:
-                    st.error("Incorrect password")
-    return st.session_state.admin
+        if st.button("Log out"):
+            for k in ("auth", "user", "admin"):
+                st.session_state.pop(k, None)
+            st.rerun()
 
 
 # ----------------------------------------------------------------------------
@@ -320,7 +311,8 @@ def render(scheme: Scheme):
     gifts = _load_gifts(gifts_path, mtime)
     dealers = _aggregate(scheme, dated, agg)
     last_updated = datetime.fromtimestamp(mtime).strftime("%d %b %Y")
-    admin = _admin_gate()
+    _sidebar_account()
+    admin = bool(st.session_state.get("admin"))
 
     PPM, GPP, MIN = scheme.points_per_mt, scheme.gift_per_point, scheme.min_mt
     EB = scheme.early_bird
