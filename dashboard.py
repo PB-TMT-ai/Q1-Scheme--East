@@ -401,8 +401,9 @@ def _month_dataframes(scheme, mtime):
     return mdf, jdf
 
 
-def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
-    """Distributor × State report with May / June / Total / Qualified splits."""
+def _distributor_table(scope, may_df, june_df, multi_zone) -> pd.DataFrame:
+    """Zone × State × Distributor report with May/June/Total/Qualified splits,
+    a TOTAL row at the head and per-Zone subtotal rows (screenshot-friendly)."""
     valid = set(scope[KEYS].itertuples(index=False, name=None))
 
     def restrict(df):
@@ -412,7 +413,7 @@ def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
         return df[keep]
 
     md, jd = restrict(may_df), restrict(june_df)
-    keys = ["State", "Distributor"]
+    keys = ["Zone", "State", "Distributor"]
 
     def ndealers(df):
         return df[df["MT"] > 0].groupby(keys)["Dealer"].nunique() if not df.empty else pd.Series(dtype=int)
@@ -421,60 +422,74 @@ def _distributor_table(scope, may_df, june_df) -> pd.DataFrame:
         return df.groupby(keys)["MT"].sum() if not df.empty else pd.Series(dtype=float)
 
     qd = scope[scope["Qualified"]]
-    out = scope.groupby(keys).agg(TotDealers=("Dealer", "nunique"), TotVol=("Total MT", "sum"))
-    out["MayDealers"], out["MayVol"] = ndealers(md), vol(md)
-    out["JunDealers"], out["JunVol"] = ndealers(jd), vol(jd)
-    out["QualDealers"] = qd.groupby(keys)["Dealer"].nunique()
-    out["QualVol"] = qd.groupby(keys)["Total MT"].sum()
-    out = out.fillna(0).reset_index().sort_values("TotVol", ascending=False)
+    base = scope.groupby(keys).agg(TotDealers=("Dealer", "nunique"), TotVol=("Total MT", "sum"))
+    base["MayDealers"], base["MayVol"] = ndealers(md), vol(md)
+    base["JunDealers"], base["JunVol"] = ndealers(jd), vol(jd)
+    base["QualDealers"] = qd.groupby(keys)["Dealer"].nunique()
+    base["QualVol"] = qd.groupby(keys)["Total MT"].sum()
+    base = base.fillna(0).reset_index().sort_values(
+        ["Zone", "State", "TotVol"], ascending=[True, True, False])
 
-    disp = pd.DataFrame({
-        "Distributor Name": out["Distributor"],
-        "State": out["State"],
-        "# May Dealers": out["MayDealers"].astype(int),
-        "May Vol (MT)": out["MayVol"].round(2),
-        "# June Dealers": out["JunDealers"].astype(int),
-        "June Vol (MT)": out["JunVol"].round(2),
-        "# Total Dealers Transacted": out["TotDealers"].astype(int),
-        "Total Vol (MT)": out["TotVol"].round(2),
-        "# Qualified dealers": out["QualDealers"].astype(int),
-        "Qualified Vol (MT)": out["QualVol"].round(2),
-    })
-    total = {"Distributor Name": "TOTAL", "State": ""}
-    for c in disp.columns[2:]:
-        total[c] = round(float(disp[c].sum()), 2) if "Vol" in c else int(disp[c].sum())
-    return pd.concat([pd.DataFrame([total]), disp], ignore_index=True)
+    NUM = ["MayDealers", "MayVol", "JunDealers", "JunVol", "TotDealers", "TotVol", "QualDealers", "QualVol"]
+    HEAD = ["# May Dealers", "May Vol (MT)", "# June Dealers", "June Vol (MT)",
+            "# Total Dealers Transacted", "Total Vol (MT)", "# Qualified dealers", "Qualified Vol (MT)"]
+
+    def row(zone, state, dist, s):
+        d = {"Zone": zone, "State": state, "Distributor Name": dist}
+        for h, n in zip(HEAD, NUM):
+            d[h] = round(float(s[n]), 2) if "Vol" in h else int(s[n])
+        return d
+
+    rows = [row("", "", "TOTAL", base[NUM].sum())]
+    for zone in sorted(base["Zone"].unique()):
+        zb = base[base["Zone"] == zone]
+        for _, r in zb.iterrows():
+            rows.append(row(r["Zone"], r["State"], r["Distributor"], r))
+        if multi_zone:
+            rows.append(row(zone, "", f"{zone} total", zb[NUM].sum()))
+    return pd.DataFrame(rows)
+
+
+def _style_report(df):
+    """Bold + shade the TOTAL and zone-subtotal rows; show zeros as '-'."""
+    def hl(r):
+        d = str(r["Distributor Name"])
+        if d == "TOTAL":
+            return ["background-color:#DCE6F1; font-weight:700"] * len(r)
+        if d.endswith(" total"):
+            return ["background-color:#E2EFDA; font-weight:700"] * len(r)
+        return [""] * len(r)
+
+    def fmt(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return v
+        return "-" if v == 0 else f"{v:,.0f}"
+
+    numcols = [c for c in df.columns if c not in ("Zone", "State", "Distributor Name")]
+    return df.style.apply(hl, axis=1).format({c: fmt for c in numcols})
 
 
 def _summary(scheme, scope, gifts, multi_zone, mtime):
-    """Admin-only roll-up: totals + breakdown by State / Distributor / Gift,
-    with estimated running gift cost (each qualified dealer at full catalogue value)."""
+    """Admin report: screenshot-ready Zone/State/Distributor table (May vs June),
+    with the gift-wise cost summary tucked into an expander."""
+    may_df, june_df = _month_dataframes(scheme, mtime)
+    report = _distributor_table(scope, may_df, june_df, multi_zone)
+    st.markdown("**📦 Zone · State · Distributor — May vs June**")
+    st.dataframe(_style_report(report), hide_index=True, width="stretch")
+    st.download_button("⬇ Download (CSV)", report.to_csv(index=False),
+                       file_name=f"{scheme.key}_distributor_report.csv", mime="text/csv")
+
+    # gift-wise cost summary (kept, but out of the way of the screenshot table)
     df = scope.copy()
     tiers = gifts.sort_values("MT")
     cost_of = {int(r.MT): int(r.Cost) for _, r in tiers.iterrows()}
     name_of = {0: "No gift", **{int(r.MT): f"{int(r.MT)} MT · {r.Gift}" for _, r in tiers.iterrows()}}
-
-    def tier_mt(t, q):
-        g = gift_for(t, gifts) if q else None
-        return int(g["MT"]) if g is not None else 0
-    df["TierMT"] = [tier_mt(t, q) for t, q in zip(df["Total MT"], df["Qualified"])]
+    df["TierMT"] = [(int(gift_for(t, gifts)["MT"]) if q and gift_for(t, gifts) is not None else 0)
+                    for t, q in zip(df["Total MT"], df["Qualified"])]
     df["GiftCost"] = df["TierMT"].map(lambda m: cost_of.get(m, 0))
-
-    tot_d, tot_q = len(df), int(df["Qualified"].sum())
-    tot_v = df["Total MT"].sum()
-    qual_v = df.loc[df["Qualified"], "Total MT"].sum()
-    run_cost = int(df["GiftCost"].sum())
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Dealers (qual / total)", f"{tot_q} / {tot_d}")
-    c2.metric("Total MT", mt_fmt(tot_v))
-    c3.metric("Qualified MT", mt_fmt(qual_v))
-    st.metric("Est. running gift cost (at max value)", "₹" + inr(run_cost),
-              help="Each qualified dealer's tier gift at full catalogue cost (incl. TDS).")
-
-    dim = st.radio("Break down by", ["State", "Distributor", "Gift"], horizontal=True)
-
-    if dim == "Gift":
+    with st.expander(f"🎁 Gift-wise summary · est. running cost ₹{inr(int(df['GiftCost'].sum()))}"):
         grp = df.groupby("TierMT")
         out = pd.DataFrame({
             "Dealers": grp["Dealer"].count(),
@@ -488,32 +503,6 @@ def _summary(scheme, scope, gifts, multi_zone, mtime):
                      hide_index=True, width="stretch")
         st.caption("Est. cost = dealers × gift catalogue cost (max value, incl. TDS). "
                    "'No gift' = below 12 MT.")
-    else:
-        col = dim
-        grp = df.groupby(col)
-        out = pd.DataFrame({
-            "Dealers": grp["Dealer"].count(),
-            "Qualified": grp["Qualified"].sum().astype(int),
-            "Total MT": grp["Total MT"].sum(),
-            "Est. Cost ₹": grp["GiftCost"].sum(),
-        })
-        out["Qual. MT"] = df[df["Qualified"]].groupby(col)["Total MT"].sum()
-        out["Qual. MT"] = out["Qual. MT"].fillna(0)
-        out = out.reset_index().sort_values("Total MT", ascending=False)
-        out["Total MT"] = out["Total MT"].map(mt_fmt)
-        out["Qual. MT"] = out["Qual. MT"].map(mt_fmt)
-        out["Est. Cost ₹"] = out["Est. Cost ₹"].map(lambda x: "₹" + inr(x))
-        st.dataframe(out[[col, "Dealers", "Qualified", "Total MT", "Qual. MT", "Est. Cost ₹"]],
-                     hide_index=True, width="stretch")
-
-    # Distributor × State report: May vs June vs Total vs Qualified
-    st.divider()
-    st.markdown("**📦 Distributor-wise · May vs June**")
-    may_df, june_df = _month_dataframes(scheme, mtime)
-    dtable = _distributor_table(scope, may_df, june_df)
-    st.dataframe(dtable, hide_index=True, width="stretch")
-    st.download_button("⬇ Download (CSV)", dtable.to_csv(index=False),
-                       file_name=f"{scheme.key}_distributor_summary.csv", mime="text/csv")
 
 
 def _kpi_band(scheme, df, admin):
