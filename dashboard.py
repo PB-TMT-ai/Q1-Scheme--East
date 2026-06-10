@@ -2,6 +2,7 @@
 zone-scheme defined in schemes.py."""
 import base64
 import html
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,27 +92,59 @@ def _load_gifts(path: str, mtime: float) -> pd.DataFrame:
     return g.sort_values("MT").reset_index(drop=True)
 
 
-def _aggregate(scheme: Scheme, dated: pd.DataFrame, agg: pd.DataFrame) -> pd.DataFrame:
-    """One row per dealer. Early-bird volume = dated billings on/before the cutoff
-    (only when the scheme has early bird); everything else is 'after'."""
-    eb_cut = pd.Timestamp(scheme.eb_date) if scheme.early_bird and scheme.eb_date else None
+def _dealer_pieces(scheme: Scheme, mtime: float) -> pd.DataFrame:
+    """One row per dealer with WHOLE-MT temporal pieces (half-up rounded), so every
+    derived figure is an integer and sums tie out exactly:
+      eb   = volume billed on/before the early-bird cutoff (early-bird schemes)
+      May  = eb + rest-of-May  ·  June = June volume  ·  Total = eb + May-after + June
+    """
+    eb_iso = scheme.eb_date.isoformat() if scheme.eb_date else None
+    dated = _load_dated(scheme.paths(scheme.dated_files), mtime, eb_iso)
+    may_agg = _load_agg(scheme.paths([f for f in scheme.agg_files if "may" in f.lower()]), mtime)
+    jun_agg = _load_agg(scheme.paths([f for f in scheme.agg_files if "june" in f.lower()]), mtime)
+    cut = pd.Timestamp(scheme.eb_date) if (scheme.early_bird and scheme.eb_date) else None
 
-    if eb_cut is not None and not dated.empty:
-        eb = dated[dated["Date"] <= eb_cut].groupby(KEYS)["MT"].sum()
-        after_d = dated[~(dated["Date"] <= eb_cut)].groupby(KEYS)["MT"].sum()
+    def grp(df):
+        return df.groupby(KEYS)["MT"].sum() if not df.empty else pd.Series(dtype=float)
+
+    if cut is not None and not dated.empty:
+        eb_ex = grp(dated[dated["Date"] <= cut])
+        mid_dated = grp(dated[~(dated["Date"] <= cut)])        # May, after the cutoff
     else:
-        eb = pd.Series(dtype=float)
-        after_d = dated.groupby(KEYS)["MT"].sum() if not dated.empty else pd.Series(dtype=float)
-    after_a = agg.groupby(KEYS)["MT"].sum() if not agg.empty else pd.Series(dtype=float)
+        eb_ex = pd.Series(dtype=float)
+        mid_dated = grp(dated) if not dated.empty else pd.Series(dtype=float)
+    may_a = grp(may_agg)                                       # May aggregate (non-EB schemes)
+    jun_ex = grp(jun_agg)
 
-    idx = eb.index.union(after_d.index).union(after_a.index)
-    eb = eb.reindex(idx, fill_value=0.0)
-    after = (after_d.reindex(idx, fill_value=0.0)
-             .add(after_a.reindex(idx, fill_value=0.0), fill_value=0.0))
+    idx = None
+    for s in (eb_ex, mid_dated, may_a, jun_ex):
+        if not s.empty:
+            idx = s.index if idx is None else idx.union(s.index)
+    if idx is None:
+        return pd.DataFrame(columns=KEYS + ["eb", "after", "May", "June", "Total"])
 
+    def ri(s):
+        return s.reindex(idx, fill_value=0.0)
+
+    eb_r = ri(eb_ex).map(rhalf)
+    mid_r = (ri(mid_dated) + ri(may_a)).map(rhalf)
+    jun_r = ri(jun_ex).map(rhalf)
+
+    p = pd.DataFrame(index=idx)
+    p["eb"] = eb_r
+    p["after"] = mid_r + jun_r
+    p["May"] = eb_r + mid_r
+    p["June"] = jun_r
+    p["Total"] = eb_r + mid_r + jun_r
+    return p.reset_index()  # KEYS + eb, after, May, June, Total
+
+
+def _aggregate(scheme: Scheme, mtime: float) -> pd.DataFrame:
+    """One row per dealer with whole-MT scheme metrics."""
+    p = _dealer_pieces(scheme, mtime)
     rows = []
-    for key_vals, v_eb, v_after in zip(idx, eb.values, after.values):
-        total = v_eb + v_after
+    for r in p.itertuples(index=False):
+        v_eb, v_after, total = r.eb, r.after, r.Total
         qualified = total >= scheme.min_mt
         if not qualified:
             points, eb_applied = 0.0, False
@@ -123,10 +156,10 @@ def _aggregate(scheme: Scheme, dated: pd.DataFrame, agg: pd.DataFrame) -> pd.Dat
             eb_applied = False
             points = total * scheme.points_per_mt
         rows.append({
-            "Zone": key_vals[0], "State": key_vals[1],
-            "Distributor": key_vals[2], "Dealer": key_vals[3],
-            "MT_eb": round(v_eb, 2), "MT_after": round(v_after, 2),
-            "Total MT": round(total, 2), "Points": round(points, 0),
+            "Zone": r.Zone, "State": r.State, "Distributor": r.Distributor, "Dealer": r.Dealer,
+            "MT_eb": int(v_eb), "MT_after": int(v_after),
+            "May MT": int(r.May), "June MT": int(r.June),
+            "Total MT": int(total), "Points": round(points, 0),
             "Gift Value": round(points * scheme.gift_per_point, 0),
             "Qualified": qualified, "Early Bird": eb_applied and qualified,
         })
@@ -151,8 +184,17 @@ def inr(n: float) -> str:
     return ("-" if n < 0 else "") + s
 
 
-def mt_fmt(x: float) -> str:
-    return f"{x:.2f}".rstrip("0").rstrip(".")
+def rhalf(x) -> int:
+    """Round half-up to a whole number (10.5 -> 11, 10.4 -> 10)."""
+    try:
+        return int(math.floor(float(x) + 0.5))
+    except (TypeError, ValueError):
+        return 0
+
+
+def mt_fmt(x) -> str:
+    """Whole-number MT with thousands separators."""
+    return f"{rhalf(x):,}"
 
 
 def status_of(scheme: Scheme, r) -> tuple[str, str]:
@@ -306,10 +348,10 @@ def render(scheme: Scheme):
     mtime = max(Path(p).stat().st_mtime for p in all_paths)
     eb_iso = scheme.eb_date.isoformat() if scheme.eb_date else None
 
-    dated = _load_dated(dated_paths, mtime, eb_iso)
+    dated = _load_dated(dated_paths, mtime, eb_iso)   # raw billings (for billing history)
     agg = _load_agg(agg_paths, mtime)
     gifts = _load_gifts(gifts_path, mtime)
-    dealers = _aggregate(scheme, dated, agg)
+    dealers = _aggregate(scheme, mtime)
     last_updated = datetime.fromtimestamp(mtime).strftime("%d %b %Y")
     _sidebar_account()
     admin = bool(st.session_state.get("admin"))
@@ -406,45 +448,24 @@ def render(scheme: Scheme):
             st.caption("Tip: pick a Dealer in the filter above for full details.")
         if admin:
             with tabs[3]:
-                _summary(scheme, scope, gifts, multi_zone, mtime)
+                _summary(scheme, scope, gifts, multi_zone)
 
 
-def _month_dataframes(scheme, mtime):
-    """Per-dealer MT split into May and June sources (by filename)."""
-    allfiles = list(scheme.dated_files) + list(scheme.agg_files)
-    may = scheme.paths([f for f in allfiles if "may" in f.lower()])
-    jun = scheme.paths([f for f in allfiles if "june" in f.lower()])
-    mdf = _load_agg(may, mtime) if may else pd.DataFrame(columns=KEYS + ["MT"])
-    jdf = _load_agg(jun, mtime) if jun else pd.DataFrame(columns=KEYS + ["MT"])
-    mdf = mdf.groupby(KEYS, as_index=False)["MT"].sum() if not mdf.empty else mdf
-    jdf = jdf.groupby(KEYS, as_index=False)["MT"].sum() if not jdf.empty else jdf
-    return mdf, jdf
-
-
-def _distributor_table(scope, may_df, june_df, multi_zone) -> pd.DataFrame:
+def _distributor_table(scope, multi_zone) -> pd.DataFrame:
     """Zone × State × Distributor report with May/June/Total/Qualified splits,
-    a TOTAL row at the head and per-Zone subtotal rows (screenshot-friendly)."""
-    valid = set(scope[KEYS].itertuples(index=False, name=None))
-
-    def restrict(df):
-        if df.empty:
-            return df
-        keep = [t in valid for t in df[KEYS].itertuples(index=False, name=None)]
-        return df[keep]
-
-    md, jd = restrict(may_df), restrict(june_df)
+    a TOTAL row at the head and per-Zone subtotal rows (screenshot-friendly).
+    All volumes come from the per-dealer whole-MT pieces, so May + June = Total."""
     keys = ["Zone", "State", "Distributor"]
-
-    def ndealers(df):
-        return df[df["MT"] > 0].groupby(keys)["Dealer"].nunique() if not df.empty else pd.Series(dtype=int)
-
-    def vol(df):
-        return df.groupby(keys)["MT"].sum() if not df.empty else pd.Series(dtype=float)
-
     qd = scope[scope["Qualified"]]
-    base = scope.groupby(keys).agg(TotDealers=("Dealer", "nunique"), TotVol=("Total MT", "sum"))
-    base["MayDealers"], base["MayVol"] = ndealers(md), vol(md)
-    base["JunDealers"], base["JunVol"] = ndealers(jd), vol(jd)
+    md = scope[scope["May MT"] > 0]
+    jd = scope[scope["June MT"] > 0]
+
+    base = scope.groupby(keys).agg(TotDealers=("Dealer", "nunique"),
+                                   TotVol=("Total MT", "sum"))
+    base["MayDealers"] = md.groupby(keys)["Dealer"].nunique()
+    base["MayVol"] = scope.groupby(keys)["May MT"].sum()
+    base["JunDealers"] = jd.groupby(keys)["Dealer"].nunique()
+    base["JunVol"] = scope.groupby(keys)["June MT"].sum()
     base["QualDealers"] = qd.groupby(keys)["Dealer"].nunique()
     base["QualVol"] = qd.groupby(keys)["Total MT"].sum()
     base = base.fillna(0).reset_index().sort_values(
@@ -457,7 +478,7 @@ def _distributor_table(scope, may_df, june_df, multi_zone) -> pd.DataFrame:
     def row(zone, state, dist, s):
         d = {"Zone": zone, "State": state, "Distributor Name": dist}
         for h, n in zip(HEAD, NUM):
-            d[h] = round(float(s[n]), 2) if "Vol" in h else int(s[n])
+            d[h] = int(s[n])
         return d
 
     rows = [row("", "", "TOTAL", base[NUM].sum())]
@@ -491,11 +512,10 @@ def _style_report(df):
     return df.style.apply(hl, axis=1).format({c: fmt for c in numcols})
 
 
-def _summary(scheme, scope, gifts, multi_zone, mtime):
+def _summary(scheme, scope, gifts, multi_zone):
     """Admin report: screenshot-ready Zone/State/Distributor table (May vs June),
     with the gift-wise cost summary tucked into an expander."""
-    may_df, june_df = _month_dataframes(scheme, mtime)
-    report = _distributor_table(scope, may_df, june_df, multi_zone)
+    report = _distributor_table(scope, multi_zone)
     st.markdown("**📦 Zone · State · Distributor — May vs June**")
     st.dataframe(_style_report(report), hide_index=True, width="stretch")
     st.download_button("⬇ Download (CSV)", report.to_csv(index=False),
@@ -624,10 +644,10 @@ def _dealer_detail(scheme, r, admin, gifts, dated, agg):
             win = ("≤ cutoff (early bird)" if EB and pd.notna(x["Date"]) and x["Date"] <= pd.Timestamp(scheme.eb_date)
                    else "after cutoff" if EB else "")
             hist.append({"Date": x["Date"].strftime("%d %b %Y") if pd.notna(x["Date"]) else "—",
-                         "MT": x["MT"], **({"Window": win} if EB else {})})
+                         "MT": rhalf(x["MT"]), **({"Window": win} if EB else {})})
     amt = agg[sel(agg)]["MT"].sum() if not agg.empty else 0.0
     if amt > 0:
-        hist.append({"Date": "Secondary sales (to date)", "MT": round(amt, 2),
+        hist.append({"Date": "Secondary sales (to date)", "MT": rhalf(amt),
                      **({"Window": "after cutoff"} if EB else {})})
     if hist:
         with st.expander(f"Billing detail ({len(hist)} entries)"):
