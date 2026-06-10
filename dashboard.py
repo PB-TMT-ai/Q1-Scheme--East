@@ -354,6 +354,26 @@ def render(scheme: Scheme):
         _dealer_detail(scheme, scope.iloc[0], admin, gifts, dated, agg)
     else:
         _kpi_band(scheme, scope, admin)
+
+        # Click-to-view list of qualified dealers (respects the current filters)
+        q = scope[scope["Qualified"]].sort_values("Total MT", ascending=False)
+        with st.expander(f"🟢 View qualified dealers (≥{int(MIN)} MT) — {len(q)}"):
+            if q.empty:
+                st.info("No qualified dealers in this scope yet.")
+            else:
+                qcols = (["Zone"] if multi_zone else []) + \
+                    ["Dealer", "Distributor", "State", "Total MT", "Points"]
+                if admin:
+                    qcols.append("Gift Value")
+                qd = q.copy()
+                qd["Points"] = qd["Points"].apply(inr)
+                if admin:
+                    qd["Gift Value"] = qd["Gift Value"].apply(lambda x: "₹" + inr(x))
+                st.dataframe(qd[qcols], hide_index=True, width="stretch")
+                st.download_button("⬇ Download qualified (CSV)", q[qcols].to_csv(index=False),
+                                   file_name=f"{scheme.key}_qualified_dealers.csv",
+                                   mime="text/csv", key="dl_qual")
+
         labels = ["🏆 Leaderboard", "🎯 Push list", "📋 All dealers"]
         if admin:
             labels.append("💰 Summary")
