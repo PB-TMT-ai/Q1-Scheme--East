@@ -2,9 +2,12 @@
 zone-scheme defined in schemes.py."""
 import base64
 import html
+import io
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 IST = timezone(timedelta(hours=5, minutes=30))  # report dates in India time
 
@@ -511,14 +514,46 @@ def _style_report(df):
     return df.style.apply(hl, axis=1).format({c: fmt for c in numcols})
 
 
+def _report_xlsx(report: pd.DataFrame) -> bytes:
+    """Build a formatted .xlsx of the report (bold header, shaded TOTAL/zone rows)."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        report.to_excel(w, index=False, sheet_name="Summary")
+        ws = w.sheets["Summary"]
+        bold = Font(bold=True)
+        blue = PatternFill("solid", fgColor="DCE6F1")
+        green = PatternFill("solid", fgColor="E2EFDA")
+        for c in ws[1]:                              # header
+            c.font = bold
+            c.alignment = Alignment(wrap_text=True, vertical="center")
+        names = list(report["Distributor Name"])
+        for i, name in enumerate(names, start=2):
+            fill = blue if name == "TOTAL" else green if str(name).endswith(" total") else None
+            if fill is not None:
+                for c in ws[i]:
+                    c.font = bold
+                    c.fill = fill
+        for col in ws.columns:
+            width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 9), 40)
+        ws.freeze_panes = "A2"
+    return buf.getvalue()
+
+
 def _summary(scheme, scope, gifts, multi_zone):
     """Admin report: screenshot-ready Zone/State/Distributor table (May vs June),
     with the gift-wise cost summary tucked into an expander."""
     report = _distributor_table(scope, multi_zone)
     st.markdown("**📦 Zone · State · Distributor — May vs June**")
     st.dataframe(_style_report(report), hide_index=True, width="stretch")
-    st.download_button("⬇ Download (CSV)", report.to_csv(index=False),
-                       file_name=f"{scheme.key}_distributor_report.csv", mime="text/csv")
+    c1, c2 = st.columns(2)
+    c1.download_button("⬇ Excel (.xlsx)", _report_xlsx(report),
+                       file_name=f"{scheme.key}_distributor_report.xlsx",
+                       mime=XLSX_MIME, key="dl_xlsx", width="stretch")
+    c2.download_button("⬇ CSV", report.to_csv(index=False),
+                       file_name=f"{scheme.key}_distributor_report.csv",
+                       mime="text/csv", key="dl_csv", width="stretch")
 
     # gift-wise cost summary (kept, but out of the way of the screenshot table)
     df = scope.copy()
