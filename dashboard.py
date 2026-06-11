@@ -219,7 +219,6 @@ def _css():
     st.markdown(f"""
     <style>
       .block-container {{ padding-top: 1.1rem; padding-bottom: 3rem; max-width: 760px; }}
-      #MainMenu, footer {{ visibility: hidden; }}
       .hero {{ background: linear-gradient(135deg,{NAVY} 0%,#0A5BA0 100%); color:#fff;
                border-radius:16px; padding:16px 18px; margin-bottom:14px; }}
       .hero-row {{ display:flex; align-items:center; gap:12px; }}
