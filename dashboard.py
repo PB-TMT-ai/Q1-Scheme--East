@@ -345,12 +345,9 @@ def render(scheme: Scheme):
     _css()
     if ACCESS_LOCKED:
         st.markdown(
-            f'<div class="hero"><div class="hero-row">{_logo_img()}'
-            f'<div class="hero-txt"><h1>{scheme.title}</h1>'
-            f'<div class="sub">Access closed</div></div></div></div>',
+            '<div style="text-align:center; color:#6b7686; font-size:1.1rem; '
+            'margin-top:40vh;">offline</div>',
             unsafe_allow_html=True)
-        st.error("🔒 This dashboard is currently closed. Access has been withdrawn. "
-                 "Please contact the administrator.")
         st.stop()
     _login_gate(scheme)
 
