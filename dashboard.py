@@ -12,7 +12,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Per-dashboard lock: scheme keys listed here are fully closed (only an "offline"
 # screen). Remove a key to reopen that dashboard. (e.g. {"east"} = East offline,
 # North & Central open; empty set = both open.)
-LOCKED_SCHEMES = {"east"}
+LOCKED_SCHEMES = {"east", "north_central"}
 
 IST = timezone(timedelta(hours=5, minutes=30))  # report dates in India time
 
