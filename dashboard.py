@@ -9,9 +9,10 @@ from pathlib import Path
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-# Master switch: when True, both dashboards are fully closed — nobody (sales or
-# admin) can log in or view anything. Set back to False to reopen.
-ACCESS_LOCKED = True
+# Per-dashboard lock: scheme keys listed here are fully closed (only an "offline"
+# screen). Remove a key to reopen that dashboard. (e.g. {"east"} = East offline,
+# North & Central open; empty set = both open.)
+LOCKED_SCHEMES = {"east"}
 
 IST = timezone(timedelta(hours=5, minutes=30))  # report dates in India time
 
@@ -343,7 +344,7 @@ def _sidebar_account():
 def render(scheme: Scheme):
     st.set_page_config(page_title=f"Power Play (Q1) · {scheme.region}", page_icon="📊", layout="centered")
     _css()
-    if ACCESS_LOCKED:
+    if scheme.key in LOCKED_SCHEMES:
         st.markdown(
             '<div style="text-align:center; color:#6b7686; font-size:1.1rem; '
             'margin-top:40vh;">offline</div>',
